@@ -176,10 +176,23 @@ typedef struct
 	int iword;	/*!< initial word */
 	int ibit;	/*!< initial bit */
 	int icode;	/*!< initial code */
+	int bitno;	/*!< initial bit */
 	int dataBit;	/*!< current data bit */
 	int codeCA;	/*!< current C/A code */
 	double azel[2];
 	range_t rho0;
 } channel_t;
+
+typedef struct
+{
+	int prn;	/*< PRN Number */
+	double carr_doppler;	/*< Carrier doppler shift */
+#ifdef FLOAT_CARR_PHASE
+	double carr_phase_init;
+#else
+	unsigned int carr_phase_init; /*< Carrier phase */
+#endif
+	double code_phase_init;
+} sat_info_t;
 
 #endif

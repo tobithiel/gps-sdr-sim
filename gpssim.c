@@ -705,7 +705,7 @@ unsigned long computeChecksum(unsigned long source, int nib)
 	*/ 
 
 	/*
-	                  1            2           3
+					  1            2           3
 	bit    12 3456 7890 1234 5678 9012 3456 7890
 	---    -------------------------------------
 	D25    11 1011 0001 1111 0011 0100 1000 0000
@@ -1595,6 +1595,7 @@ int allocateChannel(channel_t *chan, ephem_t *eph, ionoutc_t ionoutc, gpstime_t 
 					{
 						// Initialize channel
 						chan[i].prn = sv+1;
+						chan[i].bitno = 0;
 						chan[i].azel[0] = azel[0];
 						chan[i].azel[1] = azel[1];
 
@@ -1683,6 +1684,7 @@ int main(int argc, char *argv[])
 	double llh[3];
 	
 	int i;
+	sat_info_t sat_infos[MAX_CHAN];
 	channel_t chan[MAX_CHAN];
 	double elvmask = 0.0; // in degree
 
@@ -1731,6 +1733,14 @@ int main(int argc, char *argv[])
 
 	ionoutc_t ionoutc;
 
+	int sat_filter[MAX_SAT] = {
+		TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
+		TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
+		TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
+		TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
+	};
+	unsigned long navbits[MAX_SAT][N_DWRD] = { 0 };
+
 	////////////////////////////////////////////////////////////
 	// Read options
 	////////////////////////////////////////////////////////////
@@ -1753,7 +1763,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	while ((result=getopt(argc,argv,"e:u:g:c:l:o:s:b:T:t:d:iv"))!=-1)
+	while ((result=getopt(argc,argv,"e:u:g:c:l:o:s:b:T:t:d:f:iv"))!=-1)
 	{
 		switch (result)
 		{
@@ -1836,6 +1846,16 @@ int main(int argc, char *argv[])
 		case 'd':
 			duration = atof(optarg);
 			break;
+		case 'f':
+			optind--;
+			for (int i = 0; i < MAX_SAT; i++) {
+				sat_filter[i] = FALSE;
+			}
+			for( ;optind < argc && *argv[optind] != '-'; optind++){
+				int satno = atoi(argv[optind]);
+				sat_filter[satno] = TRUE;
+			}
+			break;
 		case 'i':
 			ionoutc.enable = FALSE; // Disable ionospheric correction
 			break;
@@ -1849,6 +1869,11 @@ int main(int argc, char *argv[])
 		default:
 			break;
 		}
+	}
+
+	fprintf(stderr, "Sat Filter:\n");
+	for (int i = 0; i < MAX_SAT; i++) {
+		fprintf(stderr, "Sat PRN %d: %d\n", i, sat_filter[i]);
 	}
 
 	if (navfile[0]==0)
@@ -2125,9 +2150,10 @@ int main(int argc, char *argv[])
 
 	for(i=0; i<MAX_CHAN; i++)
 	{
-		if (chan[i].prn>0)
+		if (chan[i].prn>0) {
 			fprintf(stderr, "%02d %6.1f %5.1f %11.1f %5.1f\n", chan[i].prn, 
 				chan[i].azel[0]*R2D, chan[i].azel[1]*R2D, chan[i].rho0.d, chan[i].rho0.iono_delay);
+		}
 	}
 
 	////////////////////////////////////////////////////////////
@@ -2167,6 +2193,14 @@ int main(int argc, char *argv[])
 
 				// Update code phase and data bit counters
 				computeCodePhase(&chan[i], rho, 0.1);
+				if (sat_infos[i].prn <= 0) {
+					printf("setting initial values for PRN %u\n", chan[i].prn);
+					fprintf(stderr, "\rTime into run = %4.1f", subGpsTime(grx, g0));
+					sat_infos[i].prn = chan[i].prn;
+					sat_infos[i].carr_doppler = chan[i].f_carr;
+					sat_infos[i].carr_phase_init = chan[i].carr_phase;
+					sat_infos[i].code_phase_init = chan[i].code_phase;
+				}
 #ifndef FLOAT_CARR_PHASE
 				chan[i].carr_phasestep = (int)round(512.0 * 65536.0 * chan[i].f_carr * delt);
 #endif
@@ -2200,8 +2234,10 @@ int main(int argc, char *argv[])
 					qp = chan[i].dataBit * chan[i].codeCA * sinTable512[iTable] * gain[i];
 
 					// Accumulate for all visible satellites
-					i_acc += ip;
-					q_acc += qp;
+					if (sat_filter[chan[i].prn]) {
+						i_acc += ip;
+						q_acc += qp;
+					}
 
 					// Update code phase
 					chan[i].code_phase += chan[i].f_code * delt;
@@ -2216,6 +2252,7 @@ int main(int argc, char *argv[])
 						{
 							chan[i].icode = 0;
 							chan[i].ibit++;
+							chan[i].bitno++;
 						
 							if (chan[i].ibit>=30) // 30 navigation data bits = 1 word
 							{
@@ -2228,6 +2265,10 @@ int main(int argc, char *argv[])
 							}
 
 							// Set new navigation data bit
+							if (sat_filter[chan[i].prn]) {
+								//fprintf(stderr, "PRN %d ibit %d nav bit %d\n", chan[i].prn, chan[i].bitno - 1, chan[i].dataBit);
+								navbits[chan[i].prn][chan[i].bitno - 1] = chan[i].dataBit;
+							}
 							chan[i].dataBit = (int)((chan[i].dwrd[chan[i].iword]>>(29-chan[i].ibit)) & 0x1UL)*2-1;
 						}
 					}
@@ -2257,6 +2298,9 @@ int main(int argc, char *argv[])
 			iq_buff[isamp*2] = (short)i_acc;
 			iq_buff[isamp*2+1] = (short)q_acc;
 		}
+
+		//fprintf(stderr, "\nfirst sample re %d im %d\n", iq_buff[0], iq_buff[1]);
+		//fprintf(stderr, "second sample re %d im %d\n", iq_buff[2], iq_buff[3]);
 
 		if (data_format==SC01)
 		{
@@ -2332,9 +2376,10 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "\n");
 				for (i=0; i<MAX_CHAN; i++)
 				{
-					if (chan[i].prn>0)
+					if (chan[i].prn>0) {
 						fprintf(stderr, "%02d %6.1f %5.1f %11.1f %5.1f\n", chan[i].prn,
 							chan[i].azel[0]*R2D, chan[i].azel[1]*R2D, chan[i].rho0.d, chan[i].rho0.iono_delay);
+					}
 				}
 			}
 		}
@@ -2359,6 +2404,100 @@ int main(int argc, char *argv[])
 
 	// Process time
 	fprintf(stderr, "Process time = %.1f [sec]\n", (double)(tend-tstart)/CLOCKS_PER_SEC);
+
+	for (i=0; i<MAX_CHAN; i++) {
+		if (sat_infos[i].prn > 0 && sat_filter[sat_infos[i].prn]) {
+			fprintf(stderr, "PRN %2d Carrier Doppler shift %f Hz Carrier Initial phase %f Code Initial Phase %d chips\n", sat_infos[i].prn, sat_infos[i].carr_doppler, sat_infos[i].carr_phase_init, (int)sat_infos[i].code_phase_init);
+			/*fprintf(stderr, "Navbits:\n");
+			for (int bla=0; bla < N_DWRD; bla++) {
+				if (navbits[sat_infos[i].prn][bla] != 0) {
+					fprintf(stderr, "\t%d: %ld\n", bla, navbits[sat_infos[i].prn][bla]);
+				}
+			}*/
+		}
+	}
+
+
+
+	int argci, v = 0;
+	char *original_cmdline = (char *)malloc(v);
+	for(argci = 1; argci < argc; argci++) {
+		v += strlen(argv[argci]) + 1;
+		original_cmdline = (char *)realloc(original_cmdline, v);
+		if (argci == 1) {
+			memset(original_cmdline, '\0', v);
+		}
+		original_cmdline[v - 1] = '\0';
+		strcat(original_cmdline, argv[argci]);
+		if (argci != argc - 1) {
+			strcat(original_cmdline, " ");
+		}
+	}
+	fprintf(stderr, "original_cmdline: '%s'\n", original_cmdline);
+
+
+
+	// TODO support different data_formats
+	if (data_format != SC16) {
+		fprintf(stderr, "Unsupported data_format for metadata file\n");
+	}
+	// not memory safe at all
+	char json_file_name[256];
+	memset(json_file_name, '\0', 256);
+	strncat(json_file_name, outfile, 255);
+	strncat(json_file_name, ".json", 255);
+	if (NULL==(fp=fopen(json_file_name, "wb"))) {
+		fprintf(stderr, "Could not write json file\n");
+	}
+	// TODO write out cmd line used, so it can be reproduced
+	fprintf(fp, "{\"complex\": true, \"data_type\": \"I16\", \"file\": \"%s\", \"if_frequency\": 0, \"sample_rate\": %f, \"sha1sum\": null, \"source\": \"osqzss/gps-sdr-sim\", \"comment\": \"%s\", \"ephemeris\": \"%s\"", outfile, samp_freq, original_cmdline, navfile);
+	fprintf(fp, ", \"acquisition\": {");
+	int first = 1, innerfirst;
+	for (i=0; i<MAX_CHAN; i++) {
+		if (sat_infos[i].prn > 0 && sat_filter[sat_infos[i].prn]) {
+			if (first == 1) {
+				first = 0;
+			} else if (first == 0) {
+				fprintf(fp, ",");
+			}
+			fprintf(fp, "\"%d\": {", sat_infos[i].prn);
+			fprintf(fp, "\"doppler_shift\": %d,", (int)(sat_infos[i].carr_doppler - fmod(sat_infos[i].carr_doppler, 500)));
+			fprintf(fp, "\"code_chip_shift\": %d", (int)sat_infos[i].code_phase_init);
+			fprintf(fp, "}");
+		}
+	}
+	fprintf(fp, "}");
+	fprintf(fp, ", \"tracking\": {");
+	first = 1;
+	for (i=0; i<MAX_CHAN; i++) {
+		if (sat_infos[i].prn > 0 && sat_filter[sat_infos[i].prn]) {
+			if (first == 1) {
+				first = 0;
+			} else if (first == 0) {
+				fprintf(fp, ",");
+			}
+			fprintf(fp, "\"%d\": {", sat_infos[i].prn);
+			fprintf(fp, "\"doppler_shift\": %d,", (int)sat_infos[i].carr_doppler);
+			fprintf(fp, "\"code_chip_shift\": %d,", (int)sat_infos[i].code_phase_init);
+			fprintf(fp, "\"nav_bits\": [");
+			innerfirst = 1;
+			for (int bla=0; bla < N_DWRD; bla++) {
+				if (navbits[sat_infos[i].prn][bla] != 0) {
+					if (innerfirst == 1) {
+						innerfirst = 0;
+					} else if (innerfirst == 0) {
+						fprintf(fp, ",");
+					}
+					fprintf(fp, "%ld", navbits[sat_infos[i].prn][bla]);
+				}
+			}
+			fprintf(fp, "]");
+			fprintf(fp, "}");
+		}
+	}
+	fprintf(fp, "}");
+	fprintf(fp, "}");
+	fclose(fp);
 
 	return(0);
 }
