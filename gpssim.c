@@ -1684,7 +1684,6 @@ int main(int argc, char *argv[])
 	double llh[3];
 	
 	int i;
-	sat_info_t sat_infos[MAX_CHAN];
 	channel_t chan[MAX_CHAN];
 	double elvmask = 0.0; // in degree
 
@@ -1739,7 +1738,6 @@ int main(int argc, char *argv[])
 		TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
 		TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
 	};
-	unsigned long navbits[MAX_SAT][N_DWRD] = { 0 };
 
 	////////////////////////////////////////////////////////////
 	// Read options
@@ -1846,16 +1844,16 @@ int main(int argc, char *argv[])
 		case 'd':
 			duration = atof(optarg);
 			break;
-		// case 'f':
-		// 	optind--;
-		// 	for (int i = 0; i < MAX_SAT; i++) {
-		// 		sat_filter[i] = FALSE;
-		// 	}
-		// 	for( ;optind < argc && *argv[optind] != '-'; optind++){
-		// 		int satno = atoi(argv[optind]);
-		// 		sat_filter[satno] = TRUE;
-		// 	}
-		// 	break;
+		case 'f':
+			optind--;
+			for (int i = 0; i < MAX_SAT; i++) {
+				sat_filter[i] = FALSE;
+			}
+			for( ;optind < argc && *argv[optind] != '-'; optind++){
+				int satno = atoi(argv[optind]);
+				sat_filter[satno] = TRUE;
+			}
+			break;
 		case 'i':
 			ionoutc.enable = FALSE; // Disable ionospheric correction
 			break;
@@ -1871,10 +1869,10 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	// fprintf(stderr, "Sat Filter:\n");
-	// for (int i = 0; i < MAX_SAT; i++) {
-	// 	fprintf(stderr, "Sat PRN %d: %d\n", i, sat_filter[i]);
-	// }
+	fprintf(stderr, "Sat Filter:\n");
+	for (int i = 0; i < MAX_SAT; i++) {
+		fprintf(stderr, "Sat PRN %d: %d\n", i, sat_filter[i]);
+	}
 
 	if (navfile[0]==0)
 	{
@@ -1897,6 +1895,13 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	iduration = (int)(duration*10.0 + 0.5);
+
+	int num_bits = (int)ceil(duration * 50);
+	unsigned long navbits[MAX_SAT][num_bits];
+	memset(navbits, 0, MAX_SAT * num_bits* sizeof(unsigned long));
+
+	sat_info_t sat_infos[MAX_CHAN];
+	memset(sat_infos, 0, MAX_CHAN * sizeof(sat_info_t));
 
 	// Buffer size	
 	samp_freq = floor(samp_freq/10.0);
@@ -2193,14 +2198,14 @@ int main(int argc, char *argv[])
 
 				// Update code phase and data bit counters
 				computeCodePhase(&chan[i], rho, 0.1);
-				// if (sat_infos[i].prn <= 0) {
-				// 	printf("setting initial values for PRN %u\n", chan[i].prn);
-				// 	fprintf(stderr, "\rTime into run = %4.1f", subGpsTime(grx, g0));
-				// 	sat_infos[i].prn = chan[i].prn;
-				// 	sat_infos[i].carr_doppler = chan[i].f_carr;
-				// 	sat_infos[i].carr_phase_init = chan[i].carr_phase;
-				// 	sat_infos[i].code_phase_init = chan[i].code_phase;
-				// }
+				if (sat_infos[i].prn <= 0) {
+					printf("setting initial values for PRN %u\n", chan[i].prn);
+					fprintf(stderr, "\rTime into run = %4.1f", subGpsTime(grx, g0));
+					sat_infos[i].prn = chan[i].prn;
+					sat_infos[i].carr_doppler = chan[i].f_carr;
+					sat_infos[i].carr_phase_init = chan[i].carr_phase;
+					sat_infos[i].code_phase_init = chan[i].code_phase;
+				}
 #ifndef FLOAT_CARR_PHASE
 				chan[i].carr_phasestep = (int)round(512.0 * 65536.0 * chan[i].f_carr * delt);
 #endif
@@ -2234,10 +2239,10 @@ int main(int argc, char *argv[])
 					qp = chan[i].dataBit * chan[i].codeCA * sinTable512[iTable] * gain[i];
 
 					// Accumulate for all visible satellites
-					//if (sat_filter[chan[i].prn]) {
+					if (sat_filter[chan[i].prn]) {
 						i_acc += ip;
 						q_acc += qp;
-					//}
+					}
 
 					// Update code phase
 					chan[i].code_phase += chan[i].f_code * delt;
@@ -2252,7 +2257,7 @@ int main(int argc, char *argv[])
 						{
 							chan[i].icode = 0;
 							chan[i].ibit++;
-							//chan[i].bitno++;
+							chan[i].bitno++;
 						
 							if (chan[i].ibit>=30) // 30 navigation data bits = 1 word
 							{
@@ -2419,19 +2424,22 @@ int main(int argc, char *argv[])
 
 
 
-	int argci, v = 0;
+	int argci, v = 1;
 	char *original_cmdline = (char *)malloc(v);
+	original_cmdline[0] = '\0';
+	int original_cmdline_len = 0;
 	for(argci = 1; argci < argc; argci++) {
 		v += strlen(argv[argci]) + 1;
 		original_cmdline = (char *)realloc(original_cmdline, v);
 		if (argci == 1) {
-			memset(original_cmdline, '\0', v);
+			memset(original_cmdline + original_cmdline_len, '\0', v - original_cmdline_len);
 		}
 		original_cmdline[v - 1] = '\0';
 		strcat(original_cmdline, argv[argci]);
 		if (argci != argc - 1) {
 			strcat(original_cmdline, " ");
 		}
+		original_cmdline_len = strlen(original_cmdline);
 	}
 	fprintf(stderr, "original_cmdline: '%s'\n", original_cmdline);
 
