@@ -2251,8 +2251,8 @@ int main(int argc, char *argv[])
 						if (chan[i].icode>=20) // 20 C/A codes = 1 navigation data bit
 						{
 							chan[i].icode = 0;
-							//chan[i].ibit++;
-							chan[i].bitno++;
+							chan[i].ibit++;
+							//chan[i].bitno++;
 						
 							if (chan[i].ibit>=30) // 30 navigation data bits = 1 word
 							{
